@@ -1,0 +1,68 @@
+name: OpenClaw Debug APK
+
+# 由服务器脚本 push 触发；页面手动 dispatch 也可（需要 token 有 Actions 写权限）
+on:
+  push:
+    branches: [openclaw-build]
+  workflow_dispatch:
+    inputs:
+      product:
+        description: '产品变体：appCore（轻量）/ appComic（漫画增强，包很大）'
+        required: true
+        type: choice
+        options: [appCore, appComic]
+        default: appCore
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PRODUCT: ${{ github.event.inputs.product || 'appCore' }}
+      PRODUCT_TAG: ${{ github.event.inputs.product == 'appComic' && 'comic' || 'core' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: openclaw-build
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # runner 在境外，阿里云镜像反而拖慢甚至超时
+      - name: Remove Aliyun mirrors
+        run: sed -i '/maven.aliyun.com/d' settings.gradle
+
+      - name: Build Debug APK
+        env:
+          COMMIT_NUMBER: ${{ github.run_number }}
+          APP_VERSION_NAME: debug-${{ github.run_number }}
+        run: |
+          chmod +x gradlew
+          PRODUCT_CAP=$(echo "$PRODUCT" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')
+          echo "==> :app:assemble${PRODUCT_CAP}Debug"
+          ./gradlew ":app:assemble${PRODUCT_CAP}Debug" -PenableAbiSplits=false --no-daemon --no-configuration-cache
+
+      - name: Collect APKs
+        run: |
+          mkdir -p out
+          find app/build/outputs/apk -name '*.apk' -exec cp -v {} out/ \;
+          ls -la out
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: legado-apks-${{ env.PRODUCT_TAG }}-${{ github.run_number }}
+          path: out/*.apk
+          if-no-files-found: error
+          retention-days: 7
