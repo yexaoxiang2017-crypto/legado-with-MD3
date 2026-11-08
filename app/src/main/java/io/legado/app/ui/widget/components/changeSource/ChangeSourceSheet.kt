@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.MoreVert
@@ -31,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -129,6 +131,22 @@ fun ChangeSourceSheet(
     var loadingAction by remember { mutableStateOf(false) }
     var showOptionsMenu by rememberSaveable { mutableStateOf(false) }
     var showFilterSheet by rememberSaveable { mutableStateOf(false) }
+    var wordCountTarget by rememberSaveable { mutableStateOf("") }
+    var wordCountTolerance by rememberSaveable { mutableStateOf("10") }
+    val wordCountTargetValue = wordCountTarget.trim().toIntOrNull()
+    // 章节字数近似筛选：开启「显示更多信息」后，按目标字数 ± 偏差百分比过滤书源
+    val visibleItems = remember(items, wordCountTargetValue, wordCountTolerance, loadWordCount) {
+        if (!loadWordCount || wordCountTargetValue == null || wordCountTargetValue <= 0) {
+            items
+        } else {
+            val tolerance = (wordCountTolerance.toFloatOrNull() ?: 10f).coerceIn(0f, 100f)
+            val delta = wordCountTargetValue * tolerance / 100f
+            items.filter {
+                it.chapterWordCount >= 0 &&
+                    kotlin.math.abs(it.chapterWordCount - wordCountTargetValue) <= delta
+            }
+        }
+    }
     val bookAddedToShelfText = stringResource(R.string.book_added_to_shelf)
     // 不在书架的书换源，只是给这本还没上架的书换个源，不存在「新增还是替换」的歧义，直接替换即可。
     val canAddAsNew = allowAddAsNew && !oldBook.isNotShelf
@@ -331,6 +349,43 @@ fun ChangeSourceSheet(
             label = stringResource(R.string.screen),
             modifier = Modifier.fillMaxWidth()
         )
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            AppTextField(
+                value = wordCountTarget,
+                onValueChange = { wordCountTarget = it.filter(Char::isDigit).take(7) },
+                backgroundColor = LegadoTheme.colorScheme.surface,
+                label = "目标字数",
+                modifier = Modifier.weight(1f),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true
+            )
+            AppTextField(
+                value = wordCountTolerance,
+                onValueChange = { wordCountTolerance = it.filter(Char::isDigit).take(3) },
+                backgroundColor = LegadoTheme.colorScheme.surface,
+                label = "偏差(%)",
+                modifier = Modifier.weight(1f),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true
+            )
+        }
+        if (wordCountTarget.isNotBlank()) {
+            Spacer(modifier = Modifier.height(4.dp))
+            AppText(
+                text = when {
+                    !loadWordCount -> "需先在右上角菜单开启「显示更多信息」以获取字数"
+                    wordCountTargetValue == null || wordCountTargetValue <= 0 -> "请输入有效的目标字数"
+                    else -> "章节字数 ≈ $wordCountTargetValue（±${wordCountTolerance.ifBlank { "10" }}%），匹配 ${visibleItems.size}/${items.size} 个书源"
+                },
+                style = LegadoTheme.typography.bodySmall,
+                color = LegadoTheme.colorScheme.onSurfaceVariant
+            )
+        }
         Spacer(modifier = Modifier.height(12.dp))
         if (isSearching) {
             AppLinearProgressIndicator(modifier = Modifier.fillMaxWidth())
@@ -342,7 +397,7 @@ fun ChangeSourceSheet(
             Spacer(modifier = Modifier.height(12.dp))
         }
 
-        if (items.isEmpty()) {
+        if (visibleItems.isEmpty()) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -358,7 +413,7 @@ fun ChangeSourceSheet(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(items, key = { it.bookUrl + it.origin }) { item ->
+                items(visibleItems, key = { it.bookUrl + it.origin }) { item ->
                     val bookScore by remember(item.origin, item.name, item.author) {
                         viewModel.bookScoreFlow(item)
                     }.collectAsStateWithLifecycle()
